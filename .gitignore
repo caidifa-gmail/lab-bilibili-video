@@ -1,0 +1,5 @@
+# Python 缓存
+__pycache__/
+
+# 下载输出目录
+download/
