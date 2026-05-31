@@ -1,0 +1,36 @@
+import os
+import subprocess
+
+FFMPEG_DIR = r"D:\0_env\ffmpeg\bin"
+
+
+def download_bilibili_collection(collection_url):
+    # 如果 ffmpeg 安装目录可用，则显式传递给 yt-dlp
+    ydl_opts = [
+        'yt-dlp',
+        # '--cookies-from-browser', 'chrome',  # 自动读取 chrome 浏览器的 cookie 以使用会员权限（支持 chrome, edge, firefox 等）
+        '-f', 'bestvideo+bestaudio/best',     # 自动选择最佳视频轨 + 最佳音频轨并合并
+        '--merge-output-format', 'mp4',       # 指定合并后的格式为 mp4
+        '-o', '%(playlist_title)s/[P%(playlist_index)s] %(title)s.%(ext)s', # 保存路径：合集名/序号-单集标题.mp4
+    ]
+
+    if os.path.isdir(FFMPEG_DIR):
+        ydl_opts += ['--ffmpeg-location', FFMPEG_DIR]
+    else:
+        print(f"警告：未检测到 ffmpeg 目录 {FFMPEG_DIR}，请确保 ffmpeg 已安装并在 PATH 中。")
+
+    ydl_opts.append(collection_url)
+    
+    print("正在开始下载合集，请稍候...")
+    # 执行下载
+    result = subprocess.run(ydl_opts, text=True)
+    
+    if result.returncode == 0:
+        print("整个合集下载并合并完成！")
+    else:
+        print("下载过程中出现错误。请检查是否已安装 ffmpeg，并确保 yt-dlp 可访问 ffmpeg。")
+
+if __name__ == "__main__":
+    # 替换为你的B站合集或列表链接（支持多P、合集、收藏夹等）
+    url = "https://www.bilibili.com/video/BV1V541147VL/?spm_id_from=333.337.search-card.all.click&vd_source=ac18b2e6eaec0d2a795231c80b55226e"
+    download_bilibili_collection(url)
