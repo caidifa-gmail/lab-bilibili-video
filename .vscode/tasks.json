@@ -1,0 +1,44 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "▶ 1-命令行版下载",
+      "type": "process",
+      "command": "python",
+      "args": ["1-get-video-files.py"],
+      "problemMatcher": [],
+      "group": "none",
+      "presentation": {
+        "reveal": "always",
+        "panel": "new",
+        "focus": true
+      }
+    },
+    {
+      "label": "▶ 2-GUI下载器",
+      "type": "process",
+      "command": "python",
+      "args": ["2-get-video-files-ui.py"],
+      "problemMatcher": [],
+      "group": "none",
+      "presentation": {
+        "reveal": "always",
+        "panel": "new",
+        "focus": true
+      }
+    },
+    {
+      "label": "▶ 3-视频目录工具箱",
+      "type": "process",
+      "command": "python",
+      "args": ["3-bilibili-video-tool.py"],
+      "problemMatcher": [],
+      "group": "none",
+      "presentation": {
+        "reveal": "always",
+        "panel": "new",
+        "focus": true
+      }
+    }
+  ]
+}

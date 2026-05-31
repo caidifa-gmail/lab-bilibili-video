@@ -129,9 +129,23 @@ pip install yt-dlp Pillow
 
 ### 启动主程序
 
+#### 命令行启动
+
 ```bash
 python 3-bilibili-video-tool.py
 ```
+
+#### VS Code Task 启动
+
+项目已配置 VS Code Task，支持一键运行各脚本：
+
+| Task 名称 | 脚本 |
+|------------|------|
+| ▶ 1-命令行版下载 | `1-get-video-files.py` |
+| ▶ 2-GUI下载器 | `2-get-video-files-ui.py` |
+| ▶ 3-视频目录工具箱 | `3-bilibili-video-tool.py` |
+
+操作方式：`Ctrl+Shift+P` → 输入 `Tasks: Run Task` → 选择对应任务。
 
 ### 下载视频
 
