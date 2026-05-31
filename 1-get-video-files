@@ -32,5 +32,5 @@ def download_bilibili_collection(collection_url):
 
 if __name__ == "__main__":
     # 替换为你的B站合集或列表链接（支持多P、合集、收藏夹等）
-    url = "https://www.bilibili.com/video/BV1V541147VL/?spm_id_from=333.337.search-card.all.click&vd_source=ac18b2e6eaec0d2a795231c80b55226e"
+    url = "https://www.bilibili.com/video/BV1T1Vu66EnX/?spm_id_from=333.1387.homepage.video_card.click&vd_source=ac18b2e6eaec0d2a795231c80b55226e"
     download_bilibili_collection(url)

@@ -1,0 +1,346 @@
+import datetime
+import json
+import os
+import subprocess
+import threading
+import tkinter as tk
+from tkinter import filedialog, messagebox, scrolledtext, ttk
+
+FFMPEG_DIR = r"D:\0_env\ffmpeg\bin"
+DEFAULT_OUTPUT_ROOT = os.path.join(os.getcwd(), "download")
+
+
+def normalize_dir_name(name: str) -> str:
+    if not name:
+        return "未知"
+    value = name.strip()
+    if value.upper() == "NA" or value in {"未知NA", "NA"}:
+        return "未知"
+    return value
+
+
+def safe_dir_name(name: str) -> str:
+    name = normalize_dir_name(name)
+    invalid_chars = '<>:"/\\|?*'
+    for ch in invalid_chars:
+        name = name.replace(ch, "_")
+    return name.strip() or "未知"
+
+
+def timestamped_folder_name(name: str) -> str:
+    prefix = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    return f"{prefix}_{safe_dir_name(name)}"
+
+
+def parse_json_from_stdout(stdout: str) -> dict:
+    try:
+        return json.loads(stdout)
+    except json.JSONDecodeError:
+        first = stdout.find("{")
+        last = stdout.rfind("}")
+        if first != -1 and last != -1 and last > first:
+            try:
+                return json.loads(stdout[first:last + 1])
+            except json.JSONDecodeError:
+                pass
+        raise
+
+
+def run_yt_dlp_json(url: str) -> dict:
+    cmd = ["yt-dlp", "--dump-single-json", "--no-warnings", "--skip-download", url]
+    if os.path.isdir(FFMPEG_DIR):
+        cmd += ["--ffmpeg-location", FFMPEG_DIR]
+
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        errors="replace",
+    )
+    stdout, stderr = proc.communicate(timeout=120)
+
+    if not stdout:
+        raise subprocess.CalledProcessError(proc.returncode, cmd, output=stdout, stderr=stderr)
+
+    info = parse_json_from_stdout(stdout)
+    if proc.returncode != 0:
+        warning = stderr.strip() or f"yt-dlp exited with code {proc.returncode}"
+        info["_yt_dlp_warning"] = warning
+    return info
+
+
+def build_entries(info: dict, url: str) -> tuple[str, list[dict]]:
+    playlist_title = info.get("playlist_title") or info.get("title") or "未知"
+    entries = info.get("entries")
+    if entries:
+        items = []
+        for idx, entry in enumerate(entries, start=1):
+            if not entry:
+                continue
+            entry_index = entry.get("playlist_index") or idx
+            entry_title = entry.get("title") or entry.get("display_id") or f"视频 {entry_index}"
+            entry_url = entry.get("webpage_url") or entry.get("url") or url
+            items.append({
+                "index": entry_index,
+                "title": entry_title,
+                "url": entry_url,
+            })
+        return playlist_title, items
+
+    single_title = info.get("title") or "未知标题"
+    return single_title, [{"index": 1, "title": single_title, "url": url}]
+
+
+def run_download(url: str, items: list[dict], output_dir: str, log_callback, status_callback):
+    if not items:
+        raise ValueError("没有选择任何下载条目。")
+
+    os.makedirs(output_dir, exist_ok=True)
+    selected_indices = [item["index"] for item in items]
+    playlist_items = ",".join(str(idx) for idx in selected_indices)
+
+    output_pattern = os.path.join(output_dir, "%(playlist_title)s", "[P%(playlist_index)s] %(title)s.%(ext)s")
+    if len(items) == 1:
+        output_pattern = os.path.join(output_dir, "%(title)s.%(ext)s")
+
+    cmd = [
+        "yt-dlp",
+        "-f",
+        "bestvideo+bestaudio/best",
+        "--merge-output-format",
+        "mp4",
+        "-o",
+        output_pattern,
+    ]
+
+    if os.path.isdir(FFMPEG_DIR):
+        cmd += ["--ffmpeg-location", FFMPEG_DIR]
+
+    if len(items) > 1:
+        cmd += ["--playlist-items", playlist_items]
+
+    cmd.append(url)
+    status_callback("开始下载...")
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+        universal_newlines=True,
+    )
+
+    for raw_line in process.stdout or []:
+        if raw_line is None:
+            continue
+        line = raw_line.replace("\r", "\n")
+        for part in line.split("\n"):
+            if not part:
+                continue
+            log_callback(part + "\n")
+            if "[download]" in part and "%" in part:
+                status_callback(part.strip())
+
+    process.wait()
+    if process.returncode != 0:
+        raise RuntimeError(f"yt-dlp 下载失败，退出码 {process.returncode}")
+
+
+def ensure_default_output_root() -> str:
+    os.makedirs(DEFAULT_OUTPUT_ROOT, exist_ok=True)
+    return DEFAULT_OUTPUT_ROOT
+
+
+class BiliDownloaderGUI:
+    def __init__(self):
+        self.root = tk.Tk()
+        self.root.title("B站视频下载器")
+        self.root.geometry("900x700")
+        self.root.resizable(True, True)
+
+        self.url_var = tk.StringVar()
+        self.output_dir_var = tk.StringVar(value=ensure_default_output_root())
+        self.playlist_title = "未知"
+        self.items = []
+        self.check_vars = []
+
+        self._build_ui()
+
+    def _build_ui(self):
+        top_frame = ttk.Frame(self.root, padding=12)
+        top_frame.pack(fill="x")
+
+        ttk.Label(top_frame, text="视频 URL:").grid(row=0, column=0, sticky="w")
+        url_entry = ttk.Entry(top_frame, textvariable=self.url_var, width=80)
+        url_entry.grid(row=0, column=1, sticky="ew", padx=(8, 8))
+        top_frame.columnconfigure(1, weight=1)
+
+        parse_button = ttk.Button(top_frame, text="解析条目", command=self.parse_url)
+        parse_button.grid(row=0, column=2, sticky="e")
+        self.parse_button = parse_button
+
+        output_frame = ttk.Frame(self.root, padding=(12, 0, 12, 0))
+        output_frame.pack(fill="x")
+
+        ttk.Label(output_frame, text="输出目录:").grid(row=0, column=0, sticky="w")
+        self.output_label = ttk.Label(output_frame, textvariable=self.output_dir_var)
+        self.output_label.grid(row=0, column=1, sticky="w", padx=(8, 8))
+
+        choose_button = ttk.Button(output_frame, text="选择目录", command=self.choose_output_dir)
+        choose_button.grid(row=0, column=2, sticky="e")
+
+        center_frame = ttk.Frame(self.root, padding=12)
+        center_frame.pack(fill="both", expand=True)
+
+        entry_frame = ttk.LabelFrame(center_frame, text="可选下载条目", padding=8)
+        entry_frame.pack(side="left", fill="both", expand=True, padx=(0, 8), pady=(0, 8))
+
+        self.canvas = tk.Canvas(entry_frame)
+        self.scrollbar = ttk.Scrollbar(entry_frame, orient="vertical", command=self.canvas.yview)
+        self.check_frame = ttk.Frame(self.canvas)
+
+        self.check_frame.bind(
+            "<Configure>",
+            lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")),
+        )
+
+        self.canvas.create_window((0, 0), window=self.check_frame, anchor="nw")
+        self.canvas.configure(yscrollcommand=self.scrollbar.set)
+
+        self.canvas.pack(side="left", fill="both", expand=True)
+        self.scrollbar.pack(side="right", fill="y")
+
+        log_frame = ttk.LabelFrame(center_frame, text="日志与进度", padding=8)
+        log_frame.pack(side="right", fill="both", expand=True, pady=(0, 8))
+
+        self.log_text = scrolledtext.ScrolledText(log_frame, wrap="word", state="disabled", height=25)
+        self.log_text.pack(fill="both", expand=True)
+
+        bottom_frame = ttk.Frame(self.root, padding=12)
+        bottom_frame.pack(fill="x")
+
+        self.status_var = tk.StringVar(value="等待输入 URL 并解析条目")
+        status_label = ttk.Label(bottom_frame, textvariable=self.status_var)
+        status_label.pack(side="left", anchor="w")
+
+        download_button = ttk.Button(bottom_frame, text="下载选中条目", command=self.download_selected)
+        download_button.pack(side="right")
+        self.download_button = download_button
+
+    def choose_output_dir(self):
+        selected = filedialog.askdirectory(initialdir=self.output_dir_var.get(), title="选择输出目录")
+        if selected:
+            self.output_dir_var.set(selected)
+
+    def parse_url(self):
+        url = self.url_var.get().strip()
+        if not url:
+            messagebox.showwarning("输入错误", "请输入 B 站视频或合集 URL。")
+            return
+
+        self._set_status("正在解析 URL...")
+        self._append_log(f"解析中：{url}\n")
+        self._clear_items()
+
+        def worker():
+            try:
+                info = run_yt_dlp_json(url)
+                playlist_title, items = build_entries(info, url)
+                self.root.after(0, self._show_items, playlist_title, items)
+                self.root.after(0, self._set_status, "解析完成，选择需要下载的条目。")
+                self.root.after(0, self._append_log, f"解析完成，共 {len(items)} 个条目。\n")
+                warning = info.get("_yt_dlp_warning")
+                if warning:
+                    self.root.after(0, self._append_log, f"yt-dlp 警告：{warning}\n")
+            except subprocess.CalledProcessError as exc:
+                error_message = exc.output if exc.output else str(exc)
+                self.root.after(0, self._append_log, f"解析失败：{error_message}\n")
+                self.root.after(0, self._set_status, "解析失败，请检查 URL 或网络。")
+                self.root.after(0, messagebox.showerror, "解析失败", error_message)
+            except Exception as exc:
+                self.root.after(0, self._append_log, f"解析异常：{exc}\n")
+                self.root.after(0, self._set_status, "解析异常。")
+                self.root.after(0, messagebox.showerror, "解析异常", str(exc))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _show_items(self, playlist_title: str, items: list[dict]):
+        self.playlist_title = normalize_dir_name(playlist_title)
+        self.items = items
+        self._clear_items()
+        for item in items:
+            var = tk.BooleanVar(value=True)
+            label = f"{item['index']}. {item['title']}"
+            cb = ttk.Checkbutton(self.check_frame, text=label, variable=var)
+            cb.pack(anchor="w", pady=2)
+            self.check_vars.append((var, item))
+
+    def _clear_items(self):
+        for widget in self.check_frame.winfo_children():
+            widget.destroy()
+        self.check_vars.clear()
+        self.items.clear()
+
+    def _append_log(self, message: str):
+        self.log_text.configure(state="normal")
+        self.log_text.insert("end", message)
+        self.log_text.see("end")
+        self.log_text.configure(state="disabled")
+
+    def _set_status(self, message: str):
+        self.status_var.set(message)
+
+    def download_selected(self):
+        selected = [item for var, item in self.check_vars if var.get()]
+        if not selected:
+            messagebox.showwarning("未选择条目", "请先选择要下载的条目。")
+            return
+
+        output_root = self.output_dir_var.get().strip() or ensure_default_output_root()
+        if not output_root:
+            messagebox.showwarning("输出目录", "请选择一个有效的输出目录。")
+            return
+
+        if not os.path.isdir(output_root):
+            try:
+                os.makedirs(output_root, exist_ok=True)
+            except OSError as exc:
+                messagebox.showerror("目录错误", f"无法创建输出目录：{exc}")
+                return
+
+        folder_name = timestamped_folder_name(self.playlist_title)
+        target_dir = os.path.join(output_root, folder_name)
+
+        self.parse_button.config(state="disabled")
+        self.download_button.config(state="disabled")
+        self._set_status("开始下载，请稍候...")
+        self._append_log(f"开始下载到目录：{target_dir}\n")
+
+        def worker():
+            try:
+                run_download(
+                    self.url_var.get().strip(),
+                    selected,
+                    target_dir,
+                    log_callback=lambda msg: self.root.after(0, self._append_log, msg),
+                    status_callback=lambda msg: self.root.after(0, self._set_status, msg),
+                )
+                self.root.after(0, self._append_log, "下载完成。\n")
+                self.root.after(0, self._set_status, "下载完成。")
+            except Exception as exc:
+                self.root.after(0, self._append_log, f"下载失败：{exc}\n")
+                self.root.after(0, self._set_status, "下载失败，请查看日志。")
+                self.root.after(0, messagebox.showerror, "下载失败", str(exc))
+            finally:
+                self.root.after(0, self.parse_button.config, {"state": "normal"})
+                self.root.after(0, self.download_button.config, {"state": "normal"})
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def run(self):
+        self.root.mainloop()
+
+
+if __name__ == "__main__":
+    BiliDownloaderGUI().run()
